@@ -13,8 +13,8 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app.engine import (  # noqa: E402
-    CHUNK, AffineSegTree, CountFenwick, Project, TimecodeOutOfRange,
-    chunk_summary, quantize_pcm16,
+    CHUNK, AffineSegTree, AuditionSnapshot, CountFenwick, Project,
+    TimecodeOutOfRange, chunk_summary, quantize_pcm16,
 )
 
 FAILS: list[str] = []
@@ -214,14 +214,88 @@ def test_access_complexity() -> None:
         a_touches = proj.fenwick.touches + proj.segtree.touches
         check(proj.chunk_loads == 1, f"N={n}: 跳听只读 1 个原始块（loads={proj.chunk_loads}）")
         check(a_touches <= bound, f"N={n}: 跳听摘要访问 {a_touches} ≤ {bound}")
+
+        # 定位与取声拆开：定位 0 次读块，取声 1 次读块，合计 1 次
+        proj.reset_counters()
+        snap = proj.locate_snapshot(12345)
+        check(proj.chunk_loads == 0,
+              f"N={n}: 定位不读原始块（loads={proj.chunk_loads}）")
+        loc_touches = proj.fenwick.touches + proj.segtree.touches
+        check(loc_touches <= bound, f"N={n}: 定位摘要访问 {loc_touches} ≤ {bound}")
+        proj.reset_counters()
+        _c, _o, _w = proj.render_snapshot(snap)
+        check(proj.chunk_loads == 1,
+              f"N={n}: 快照取声只读 1 个原始块（loads={proj.chunk_loads}）")
         if prev is not None:
             growth = t_touches / prev
             check(growth < 1.6, f"N 翻 4 倍时摘要访问增长 {growth:.2f} 倍（亚线性/对数级）")
         prev = t_touches
 
 
+def test_snapshot_freeze() -> None:
+    print("[7] 快照冻结：撤块/恢复后同一快照重放结果不变，且仍与当时剪法参考一致")
+    rng = np.random.default_rng(8)
+    total = 8 * CHUNK + 57
+    x = rng.integers(-32000, 32000, size=total).astype(np.int16)
+    proj = make_project(x, 0.9)
+    # 定位时的剪法：撤下 2、5 两块
+    for i in (2, 5):
+        proj.set_chunk_active(i, False)
+
+    def reference(off_mask: set[int], k0: int, length: int) -> np.ndarray:
+        parts = [x[b * CHUNK:min((b + 1) * CHUNK, total)]
+                 for b in range(proj.n) if b not in off_mask]
+        return reference_filter(np.concatenate(parts), proj.a)[k0:k0 + length]
+
+    snaps: dict[int, AuditionSnapshot] = {}
+    first_bytes: dict[int, bytes] = {}
+    for k in (0, 1, 4096, 9000, proj.kept_samples() - 1):
+        proj.reset_counters()
+        snap = proj.locate_snapshot(k)
+        check(proj.chunk_loads == 0, f"k={k}: 定位 0 次读块")
+        check(snap.k == k and snap.kept_at_locate == proj.kept_samples(),
+              f"k={k}: 快照记录定位当时成片长度")
+        proj.reset_counters()
+        chunk, offset, out = proj.render_snapshot(snap)
+        check(proj.chunk_loads == 1, f"k={k}: 首次取声只读 1 个原始块")
+        length = proj.chunk_counts[chunk] - offset
+        ref = reference({2, 5}, k, length)
+        d = int(np.max(np.abs(out.astype(np.int32) - ref.astype(np.int32))))
+        check(d <= 1, f"k={k}: 快照取声 vs 当时剪法参考，最大差 {d} ≤ 1")
+        snaps[k] = snap
+        first_bytes[k] = out.tobytes()
+
+    # 另一窗口改剪：撤下更多块、恢复旧块，命中块本身也被撤过再恢复
+    for i in (0, 3, 6):
+        proj.set_chunk_active(i, False)
+    proj.set_chunk_active(5, True)   # 旧撤块恢复
+    proj.set_chunk_active(2, False)  # 定位时保留的块被撤下
+    proj.set_chunk_active(2, True)   # 再恢复
+
+    for k, snap in snaps.items():
+        chunk, offset, out = proj.render_snapshot(snap)
+        check(out.tobytes() == first_bytes[k],
+              f"k={k}: 改剪后同一快照重放字节级不变")
+        # 快照里的原块/偏移不随后续编辑漂移
+        check((chunk, offset) == (snap.chunk, snap.offset),
+              f"k={k}: 原块/偏移保持定位当时的值")
+    # 工程仍在：再恢复全部块后链接依然可重放
+    for i in range(proj.n):
+        proj.set_chunk_active(i, True)
+    for k, snap in snaps.items():
+        _c, _o, out = proj.render_snapshot(snap)
+        check(out.tobytes() == first_bytes[k],
+              f"k={k}: 全部恢复后快照链接仍可重播且不变")
+
+    # 快照不持有音频数据：只有定长标量字段，大小与录音长度无关
+    import dataclasses
+    check([f.name for f in dataclasses.fields(AuditionSnapshot)] ==
+          ["chunk", "offset", "state_in", "k", "kept_at_locate"],
+          "快照仅含 5 个定长标量字段，不存样点/音频")
+
+
 def test_a_zero() -> None:
-    print("[7] 边界 a=0：滤波器退化为直通")
+    print("[8] 边界 a=0：滤波器退化为直通")
     rng = np.random.default_rng(7)
     x = rng.integers(-32768, 32767, size=2 * CHUNK + 5).astype(np.int16)
     proj = make_project(x, 0.0)
@@ -240,6 +314,7 @@ if __name__ == "__main__":
     test_end_to_end()
     test_locate_and_range()
     test_access_complexity()
+    test_snapshot_freeze()
     test_a_zero()
     print()
     if FAILS:

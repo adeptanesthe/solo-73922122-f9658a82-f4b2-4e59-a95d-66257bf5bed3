@@ -182,6 +182,29 @@ class ChunkInfo:
     start_sample: int     # 在原始录音中的起始样点号
 
 
+@dataclass(frozen=True)
+class AuditionSnapshot:
+    """定位当时剪法的不可变快照（只含定长小数据，不存任何音频字节）。
+
+    * ``chunk``/``offset``：成片样点号当时对应的原块与块内偏移；
+    * ``state_in``：按当时保留块集合前缀复合得到的入块滤波器状态；
+    * ``kept_at_locate``/``k``：定位当时的成片长度与样点号，供页面展示。
+
+    原始 PCM 文件不可变，之后无论撤块还是恢复，凭快照重放都能重建定位当时
+    从该点到块末的滤波结果，且与服务端当前剪法完全解耦。
+    """
+
+    chunk: int
+    offset: int
+    state_in: float
+    k: int
+    kept_at_locate: int
+
+    @property
+    def original_sample(self) -> int:
+        return self.chunk * CHUNK + self.offset
+
+
 class Project:
     """一个上传录音的剪辑工程（线程安全由调用方加锁保证）。"""
 
@@ -257,24 +280,43 @@ class Project:
         offset = k - before
         return chunk, offset
 
-    # ---------- 跳听：只读命中块的原始样点 ----------
-    def audition(self, k: int) -> tuple[int, int, np.ndarray]:
-        """返回 (原块号, 块内偏移, 从 k 到块末的 PCM16 滤波结果)。"""
+    # ---------- 跳听 ----------
+    def locate_snapshot(self, k: int) -> AuditionSnapshot:
+        """成片时码定位并冻结剪法；全程只访问两个树的摘要，不读原始块。
+
+        撤块/恢复只改摘要树，因此快照里的入块状态不会随后续编辑漂移；
+        原始 PCM 不可变，重放时再按快照里的块号读取那一块即可。
+        """
         chunk, offset = self.locate(k)
-
-        # 进入该块之前的滤波器状态：前缀块复合仿射作用于零状态 y[-1]=0
         _, state_in = self.segtree.prefix(chunk)
+        return AuditionSnapshot(
+            chunk=chunk,
+            offset=offset,
+            state_in=float(state_in),
+            k=k,
+            kept_at_locate=self.kept_samples(),
+        )
 
-        x = self._read_chunk(chunk).astype(np.float64)
+    def render_snapshot(self, snap: AuditionSnapshot) -> tuple[int, int, np.ndarray]:
+        """按快照重放：从定位点滤波到块末，只读快照命中的那一个原始块。
+
+        与“先拼接当时保留样点、从零状态顺序滤波再截取”的结果逐样点一致
+        （同一 float64 递推、仅输出时 rint 量化，差异 ≤ 1 个量化单位）。
+        """
+        x = self._read_chunk(snap.chunk).astype(np.float64)
         aa = self.a
         one_minus_a = 1.0 - aa
         out = np.empty(x.shape[0], dtype=np.float64)
-        s = float(state_in)
+        s = float(snap.state_in)
         # 块内逐样点递推，不取整
         for n in range(x.shape[0]):
             s = aa * s + one_minus_a * x[n]
             out[n] = s
-        return chunk, offset, quantize_pcm16(out[offset:])
+        return snap.chunk, snap.offset, quantize_pcm16(out[snap.offset:])
+
+    def audition(self, k: int) -> tuple[int, int, np.ndarray]:
+        """对当前剪法的跳听：定位 + 立即渲染，只读 1 个原始块。"""
+        return self.render_snapshot(self.locate_snapshot(k))
 
     def reset_counters(self) -> None:
         self.fenwick.touches = 0

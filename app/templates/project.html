@@ -25,9 +25,13 @@
 
 <div class="card">
   <h2>成片时码跳听</h2>
-  <label for="k">输入成片样点号（从 0 起算，有效范围 0 .. <span id="kmax">{{ state.kept_samples - 1 }}</span>）</label>
+  <label for="k">输入成片样点号（从 0 起算，当前有效范围 0 .. <span id="kmax">{{ state.kept_samples - 1 }}</span>）</label>
   <input id="k" type="number" min="0" style="max-width:260px" placeholder="例如 0、4096、10000">
   <button id="btn-audition" type="button">定位并试听</button>
+  <p class="muted" style="margin-top:8px">
+    定位会冻结当时的剪法：之后在任意窗口撤块/恢复，下方原块、偏移与试听链接都保持
+    定位时的结果，重播仍是当时的声音；只有重新点“定位并试听”才会按当前剪法生成新链接。
+  </p>
   <div id="audition-meta" class="stats" style="display:none"></div>
   <audio id="player" controls style="display:none"></audio>
 </div>
@@ -71,6 +75,7 @@ async function toggle(i, currentlyActive) {
   if (!resp.ok) { banner(data.error || "操作失败", "err"); return; }
   state = data.state;
   renderChunks();
+  renderPinned();  // 撤块/恢复不改变已冻结的定位卡片与试听链接
   const s = data.stats;
   const el = document.getElementById("toggle-stats");
   el.style.display = "block";
@@ -78,6 +83,9 @@ async function toggle(i, currentlyActive) {
     <b>${s.summary_touches}</b> 个，读取原始块 <b>${s.chunk_loads}</b> 个
     （总块数 ${state.n_chunks}，摘要访问量随总块数对数增长）`;
 }
+
+// 定位结果独立于后续撤块/恢复保存：这是“定位当时的剪法”的冻结快照
+let pinned = null;
 
 document.getElementById("btn-audition").onclick = async () => {
   clearBanner();
@@ -90,19 +98,34 @@ document.getElementById("btn-audition").onclick = async () => {
     banner(data.error || "时码越界，请重新选择", "err");
     document.getElementById("player").style.display = "none";
     document.getElementById("audition-meta").style.display = "none";
+    pinned = null;
     return;
   }
+  pinned = data;  // 冻结：后续 toggle 只更新分块网格，不改这里
+  renderPinned();
+  // 固定链接（含签名快照令牌），不加时间戳——同一链接首次加载与重播结果一致
+  const player = document.getElementById("player");
+  player.src = data.wav_url;
+  player.style.display = "block";
+  player.load();
+};
+
+function renderPinned() {
+  if (!pinned) return;
+  const data = pinned;
   const meta = document.getElementById("audition-meta");
   meta.style.display = "block";
+  const absUrl = new URL(data.wav_url, window.location.origin).href;
   meta.innerHTML =
-    `成片样点 <b>${data.k}</b> → 原块 <b>#${data.chunk}</b>，块内偏移
+    `【已冻结·定位当时的剪法】成片样点 <b>${data.k}</b>（定位时成片共
+     ${data.kept_at_locate} 个样点）→ 原块 <b>#${data.chunk}</b>，块内偏移
      <b>${data.offset}</b>（原始录音样点 ${data.original_sample}）；
      试听段为该处到块末，共 ${data.out_samples} 个样点 / ${data.duration_ms} ms。
-     本次读取摘要 <b>${data.summary_touches}</b> 个、原始块 <b>${data.chunk_loads}</b> 个。`;
-  const player = document.getElementById("player");
-  player.src = data.wav_url + "&t=" + Date.now();
-  player.style.display = "block";
-};
+     定位读取摘要 <b>${data.summary_touches}</b> 个、原始块 <b>${data.chunk_loads}</b> 个；
+     取声时再读 1 个命中原始块。<br>
+     <span class="muted">固定试听链接（撤块/恢复后仍可重播，工程在则一直有效）：</span><br>
+     <span style="word-break:break-all">${absUrl}</span>`;
+}
 
 renderChunks();
 </script>

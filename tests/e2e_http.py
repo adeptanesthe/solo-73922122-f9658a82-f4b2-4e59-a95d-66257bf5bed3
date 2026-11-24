@@ -113,7 +113,7 @@ def main() -> None:
         y[n] = s
     ref = np.clip(np.rint(y), -32768, 32767).astype(np.int16)
 
-    print("[4] 跳听：定位、长度、量化误差 ≤ 1、原始块只读 1 个")
+    print("[4] 跳听：定位、长度、量化误差 ≤ 1；定位 0 读块、取声只读 1 个命中块")
     # 覆盖每个保留块块首 + 块中几个点 + 末样点
     ks = [0]
     cursor = 0
@@ -128,14 +128,17 @@ def main() -> None:
     ks += [ref.shape[0] - 1]
     ks = sorted(set(ks))
     worst = 0
+    pinned = {}  # k -> (签名链接, 首次 WAV 字节, 定位元数据)
     for k in ks:
         status, raw, _ = http("GET", f"{BASE}/api/p/{pid}/audition?k={k}")
         check(status == 200, f"k={k} 跳听 200")
         meta = json.loads(raw)
-        check(meta["chunk_loads"] == 1, f"k={k} 只读 1 个原始块")
+        check(meta["chunk_loads"] == 0, f"k={k} 定位不读原始块")
         check(meta["summary_touches"] <= 24, f"k={k} 摘要访问 {meta['summary_touches']} 对数级")
-        status2, wb, _ = http("GET", f"{BASE}{meta['wav_url']}")
-        check(status2 == 200 and wb[:4] == b"RIFF", f"k={k} WAV 下载成功")
+        check(meta["frozen"] is True, f"k={k} 返回冻结快照标记")
+        status2, wb, hh = http("GET", f"{BASE}{meta['wav_url']}")
+        check(status2 == 200 and wb[:4] == b"RIFF", f"k={k} 签名 WAV 下载成功")
+        check(hh.get("X-Chunk-Loads") == "1", f"k={k} 取声只读 1 个原始块")
         with wave.open(io.BytesIO(wb)) as wf2:
             nfr = wf2.getnframes()
             out = np.frombuffer(wf2.readframes(nfr), dtype="<i2")
@@ -145,8 +148,35 @@ def main() -> None:
         worst = max(worst, diff)
         if diff > 1:
             check(False, f"k={k} 量化差 {diff} > 1")
+        pinned[k] = (meta["wav_url"], wb, meta)
     check(worst <= 1, f"全部 {len(ks)} 个时码最大量化差 {worst} ≤ 1")
     print(f"      对照 {len(ks)} 个时码，逐样点最大差 = {worst}")
+
+    print("[4b] 两窗改剪：撤块（含命中块）再恢复后，同一链接首次加载/重播不变")
+    # 抽几个已发链接对应的命中块，在“另一窗口”撤下后再恢复
+    hit_chunks = sorted({m["chunk"] for _u, _b, m in pinned.values()})[:6]
+    for c in hit_chunks:
+        http("POST", f"{BASE}/api/p/{pid}/chunks/{c}/toggle",
+             json.dumps({"active": False}).encode(),
+             {"Content-Type": "application/json"})
+    for c in hit_chunks:
+        http("POST", f"{BASE}/api/p/{pid}/chunks/{c}/toggle",
+             json.dumps({"active": True}).encode(),
+             {"Content-Type": "application/json"})
+    for k in (ks[0], ks[len(ks) // 2], ks[-1]):
+        url, first, meta0 = pinned[k]
+        status, wb, hh = http("GET", f"{BASE}{url}")
+        check(status == 200 and wb == first, f"k={k} 改剪后同一链接重播字节不变")
+        check(hh.get("X-Chunk-Loads") == "1", f"k={k} 重播仍只读 1 个命中块")
+        # 页面上的原块、偏移仍对应定位当时的剪法
+        status, raw, _ = http("GET", f"{BASE}/api/p/{pid}/audition?k={k}")
+        meta_now = json.loads(raw)
+        check((meta_now["chunk"], meta_now["offset"]) == (meta0["chunk"], meta0["offset"]),
+              f"k={k} 同剪法下重新定位结果稳定（块{meta0['chunk']}/偏移{meta0['offset']}）")
+
+    print("[4c] 旧入口只传样点号仍试听当前成片")
+    status, wb, _ = http("GET", f"{BASE}/api/p/{pid}/audition.wav?k=0")
+    check(status == 200 and wb[:4] == b"RIFF", "audition.wav?k=0 旧入口可用")
 
     print("[5] 定位语义抽查")
     # 成片 0 号 -> 块 0 偏移 0；跳过撤块后第一个接缝 -> 块 5 偏移 0
