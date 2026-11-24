@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}剪辑接缝跳听{% endblock %}</title>
+  <style>
+    :root { --bg:#f6f7f9; --card:#fff; --line:#d9dde3; --ink:#1f2933;
+            --muted:#66707d; --blue:#2563eb; --red:#b91c1c; --green:#15803d; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family: -apple-system, "PingFang SC", "Microsoft YaHei",
+           "Segoe UI", sans-serif; background:var(--bg); color:var(--ink); }
+    header { background:#111827; color:#fff; padding:14px 24px; }
+    header h1 { margin:0; font-size:18px; }
+    main { max-width:1080px; margin:24px auto; padding:0 16px; }
+    .card { background:var(--card); border:1px solid var(--line); border-radius:10px;
+            padding:18px 20px; margin-bottom:20px; }
+    h2 { font-size:16px; margin:0 0 12px; }
+    label { display:block; font-size:13px; color:var(--muted); margin-bottom:4px; }
+    input[type=file], input[type=text], input[type=number] {
+      width:100%; padding:8px 10px; border:1px solid var(--line); border-radius:6px;
+      font-size:14px; margin-bottom:12px; }
+    button { cursor:pointer; border:1px solid var(--blue); background:var(--blue);
+             color:#fff; border-radius:6px; padding:7px 16px; font-size:14px; }
+    button.secondary { background:#fff; color:var(--blue); }
+    .muted { color:var(--muted); font-size:13px; }
+    .error { color:var(--red); font-weight:600; }
+    .ok { color:var(--green); }
+    table { border-collapse:collapse; font-size:13px; }
+    th, td { border:1px solid var(--line); padding:4px 10px; text-align:right; }
+    .chunks { display:grid; grid-template-columns:repeat(auto-fill,minmax(96px,1fr));
+              gap:8px; max-height:340px; overflow:auto; padding:4px; }
+    .chunk { border-radius:8px; padding:8px 6px; font-size:12px; text-align:center;
+             border:1px solid var(--line); background:#f0fdf4; cursor:pointer; }
+    .chunk.off { background:#fef2f2; border-color:#fecaca; color:var(--red); }
+    .chunk b { display:block; font-size:13px; }
+    .stats { font-size:13px; background:#f1f5f9; border-radius:6px; padding:8px 12px;
+             margin-top:10px; }
+    audio { width:100%; margin-top:10px; }
+    .banner { padding:10px 14px; border-radius:8px; margin-bottom:16px; display:none; }
+    .banner.show { display:block; }
+    .banner.err { background:#fef2f2; color:var(--red); border:1px solid #fecaca; }
+    .banner.info { background:#eff6ff; color:#1d4ed8; border:1px solid #bfdbfe; }
+  </style>
+</head>
+<body>
+  <header><h1>剪辑接缝跳听 · 分块 PCM16 低通试听台</h1></header>
+  <main>{% block body %}{% endblock %}</main>
+</body>
+</html>

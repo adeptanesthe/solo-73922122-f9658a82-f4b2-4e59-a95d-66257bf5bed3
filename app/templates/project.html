@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% block title %}工程 {{ state.id }} · 剪辑接缝跳听{% endblock %}
+{% block body %}
+<div id="banner" class="banner"></div>
+
+<div class="card">
+  <h2>工程 {{ state.id }}</h2>
+  <table>
+    <tr><th>采样率</th><th>原始样点</th><th>成片保留样点</th><th>分块大小</th><th>块数</th><th>系数 a</th></tr>
+    <tr>
+      <td id="t-sr">{{ state.sample_rate }} Hz</td>
+      <td id="t-total">{{ state.total_samples }}</td>
+      <td id="t-kept">{{ state.kept_samples }}</td>
+      <td>{{ state.chunk_size }}</td>
+      <td id="t-n">{{ state.n_chunks }}</td>
+      <td>{{ state.a }}</td>
+    </tr>
+  </table>
+  <p class="muted" style="margin-top:8px">
+    绿色为保留块，红色为撤下块。点击方块即可撤下 / 恢复，操作只读写树摘要，不读取原始样点。
+  </p>
+  <div id="chunks" class="chunks"></div>
+  <div id="toggle-stats" class="stats" style="display:none"></div>
+</div>
+
+<div class="card">
+  <h2>成片时码跳听</h2>
+  <label for="k">输入成片样点号（从 0 起算，有效范围 0 .. <span id="kmax">{{ state.kept_samples - 1 }}</span>）</label>
+  <input id="k" type="number" min="0" style="max-width:260px" placeholder="例如 0、4096、10000">
+  <button id="btn-audition" type="button">定位并试听</button>
+  <div id="audition-meta" class="stats" style="display:none"></div>
+  <audio id="player" controls style="display:none"></audio>
+</div>
+
+<p><a href="{{ url_for('index') }}"><button type="button" class="secondary">上传另一段录音</button></a></p>
+
+<script>
+const PID = {{ state.id | tojson }};
+let state = {{ state | tojson }};
+
+const bannerEl = document.getElementById("banner");
+function banner(msg, kind) {
+  bannerEl.textContent = msg;
+  bannerEl.className = "banner show " + (kind === "err" ? "err" : "info");
+}
+function clearBanner() { bannerEl.className = "banner"; bannerEl.textContent = ""; }
+
+function renderChunks() {
+  const box = document.getElementById("chunks");
+  box.innerHTML = "";
+  state.chunks.forEach(c => {
+    const d = document.createElement("div");
+    d.className = "chunk" + (c.active ? "" : " off");
+    d.innerHTML = "<b>#" + c.index + "</b>" +
+      (c.active ? "保留" : "撤下") + "<br>" + c.samples + " 样点";
+    d.onclick = () => toggle(c.index, c.active);
+    box.appendChild(d);
+  });
+  document.getElementById("t-kept").textContent = state.kept_samples;
+  document.getElementById("kmax").textContent = Math.max(0, state.kept_samples - 1);
+}
+
+async function toggle(i, currentlyActive) {
+  clearBanner();
+  const resp = await fetch(`/api/p/${PID}/chunks/${i}/toggle`, {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({active: !currentlyActive})
+  });
+  const data = await resp.json();
+  if (!resp.ok) { banner(data.error || "操作失败", "err"); return; }
+  state = data.state;
+  renderChunks();
+  const s = data.stats;
+  const el = document.getElementById("toggle-stats");
+  el.style.display = "block";
+  el.innerHTML = `块 #${i} 已${currentlyActive ? "撤下" : "恢复"}：本次访问摘要
+    <b>${s.summary_touches}</b> 个，读取原始块 <b>${s.chunk_loads}</b> 个
+    （总块数 ${state.n_chunks}，摘要访问量随总块数对数增长）`;
+}
+
+document.getElementById("btn-audition").onclick = async () => {
+  clearBanner();
+  const kRaw = document.getElementById("k").value.trim();
+  const k = Number(kRaw);
+  if (!Number.isInteger(k) || k < 0) { banner("请输入非负整数样点号", "err"); return; }
+  const resp = await fetch(`/api/p/${PID}/audition?k=${k}`);
+  const data = await resp.json();
+  if (!resp.ok) {
+    banner(data.error || "时码越界，请重新选择", "err");
+    document.getElementById("player").style.display = "none";
+    document.getElementById("audition-meta").style.display = "none";
+    return;
+  }
+  const meta = document.getElementById("audition-meta");
+  meta.style.display = "block";
+  meta.innerHTML =
+    `成片样点 <b>${data.k}</b> → 原块 <b>#${data.chunk}</b>，块内偏移
+     <b>${data.offset}</b>（原始录音样点 ${data.original_sample}）；
+     试听段为该处到块末，共 ${data.out_samples} 个样点 / ${data.duration_ms} ms。
+     本次读取摘要 <b>${data.summary_touches}</b> 个、原始块 <b>${data.chunk_loads}</b> 个。`;
+  const player = document.getElementById("player");
+  player.src = data.wav_url + "&t=" + Date.now();
+  player.style.display = "block";
+};
+
+renderChunks();
+</script>
+{% endblock %}

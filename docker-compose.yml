@@ -1,0 +1,12 @@
+services:
+  clip-lab:
+    build: .
+    image: clip-lab:latest
+    ports:
+      - "5000:5000"
+    volumes:
+      - clip-data:/data
+    restart: unless-stopped
+
+volumes:
+  clip-data:

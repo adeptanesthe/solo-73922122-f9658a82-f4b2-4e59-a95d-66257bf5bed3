@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="card">
+  <h2>上传单声道 PCM16 WAV</h2>
+  <form action="{{ url_for('upload') }}" method="post" enctype="multipart/form-data">
+    <label for="wav">录音文件（.wav，单声道、16 bit PCM）</label>
+    <input id="wav" name="wav" type="file" accept=".wav,audio/wav" required>
+    <label for="a">低通系数 a（0 ≤ a &lt; 1）：y[n] = a·y[n−1] + (1−a)·x[n]，零状态起步</label>
+    <input id="a" name="a" type="text" inputmode="decimal" value="0.85" required>
+    <button type="submit">上传并分块</button>
+  </form>
+  <p class="muted" style="margin-top:10px">
+    分块大小固定 4096 样点；末块按实际长度。示例录音见仓库 sample_audio/ 目录。
+  </p>
+</div>
+
+{% if projects %}
+<div class="card">
+  <h2>本次服务内已建工程</h2>
+  <table>
+    <tr><th>工程</th><th>采样率</th><th>总样点</th><th>保留样点</th><th>块数</th><th>a</th><th></th></tr>
+    {% for p in projects %}
+    <tr>
+      <td>{{ p.id }}</td><td>{{ p.sample_rate }}</td><td>{{ p.total_samples }}</td>
+      <td>{{ p.kept_samples() }}</td><td>{{ p.n }}</td><td>{{ p.a }}</td>
+      <td><a href="{{ url_for('project_page', pid=p.id) }}">打开</a></td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% endif %}
+{% endblock %}

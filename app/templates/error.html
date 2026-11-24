@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}出错 · 剪辑接缝跳听{% endblock %}
+{% block body %}
+<div class="card">
+  <h2 class="error">无法建立工程</h2>
+  <p>{{ message }}</p>
+  <p><a href="{{ url_for('index') }}"><button type="button" class="secondary">返回重传</button></a></p>
+</div>
+{% endblock %}
